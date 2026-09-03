@@ -234,6 +234,45 @@ func testMultiSourceEndpointsDefaultTargets(t *testing.T) {
 		src.AssertExpectations(t)
 	})
 
+	t.Run("Explicit target annotation survives the flag being set", func(t *testing.T) {
+		defaultTargets := []string{"127.0.0.1"}
+		labels := endpoint.Labels{"foo": "bar"}
+
+		// "foo" got its target from the explicit per-resource target
+		// annotation; "bar" got its target from natural source
+		// resolution (e.g. Ingress/Service status).
+		sourceEndpoints := []*endpoint.Endpoint{
+			(&endpoint.Endpoint{DNSName: "foo", Targets: endpoint.Targets{"9.9.9.9"}, Labels: labels}).WithTargetsFromAnnotation(true),
+			{DNSName: "bar", Targets: endpoint.Targets{"8.8.4.4"}, Labels: labels},
+		}
+
+		// "foo" keeps its annotation-provided target despite the flag;
+		// "bar" is overridden like the non-annotation case above.
+		expectedEndpoints := []*endpoint.Endpoint{
+			{DNSName: "foo", Targets: endpoint.Targets{"9.9.9.9"}, Labels: labels},
+			{DNSName: "bar", Targets: defaultTargets, RecordType: "A", Labels: labels},
+		}
+
+		src := new(testutils.MockSource)
+		src.On("Endpoints").Return(sourceEndpoints, nil)
+
+		// Test with forceDefaultTargets=true (legacy behavior)
+		source := NewMultiSource([]source.Source{src}, defaultTargets, true)
+
+		endpoints, err := source.Endpoints(t.Context())
+		require.NoError(t, err)
+
+		testutils.ValidateEndpoints(t, endpoints, expectedEndpoints)
+		require.Len(t, endpoints, 2)
+		for _, ep := range endpoints {
+			if ep.DNSName == "foo" {
+				assert.True(t, ep.TargetsFromAnnotation(), "foo should still be marked as annotation-sourced")
+			}
+		}
+
+		src.AssertExpectations(t)
+	})
+
 	t.Run("Defaults applied when source targets are empty and flag is set", func(t *testing.T) {
 		defaultTargetsA := []string{"127.0.0.1", "127.0.0.2"}
 		defaultTargetsAAAA := []string{"2001:db8::1"}
