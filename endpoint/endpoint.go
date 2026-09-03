@@ -287,7 +287,7 @@ type Endpoint struct {
 	refObjects []*ObjectRef `json:"-"`
 	// targetsFromAnnotation records whether Targets was set from an explicit
 	// per-resource target annotation (e.g.
-	// external-dns.alpha.kubernetes.io/target) rather than from the source's
+	// external-dns.kubernetes.io/target) rather than from the source's
 	// natural target resolution. Not persisted: it is an in-process signal
 	// consumed only by the multi-source merge layer.
 	targetsFromAnnotation bool `json:"-"`
@@ -502,7 +502,7 @@ func (e *Endpoint) RefObjects() []*events.ObjectReference {
 }
 
 // WithTargetsFromAnnotation marks whether Targets originated from an explicit
-// per-resource target annotation (e.g. external-dns.alpha.kubernetes.io/target)
+// per-resource target annotation (e.g. external-dns.kubernetes.io/target)
 // rather than the source's natural target resolution.
 func (e *Endpoint) WithTargetsFromAnnotation(v bool) *Endpoint {
 	e.targetsFromAnnotation = v

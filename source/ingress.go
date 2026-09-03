@@ -168,8 +168,7 @@ func (sc *ingressSource) endpointsFromTemplate(ing *networkv1.Ingress) ([]*endpo
 
 	ttl := annotations.TTLFromAnnotations(ing.Annotations, resource)
 
-	targets := annotations.TargetsFromTargetAnnotation(ing.Annotations)
-	targetsFromAnnotation := len(targets) > 0
+	targets, targetsFromAnnotation := annotations.TargetsFromTargetAnnotationWithSource(ing.Annotations)
 	if !targetsFromAnnotation {
 		targets = targetsFromIngressStatus(ing.Status)
 	}
@@ -233,8 +232,7 @@ func endpointsFromIngress(ing *networkv1.Ingress, ignoreHostnameAnnotation bool,
 
 	ttl := annotations.TTLFromAnnotations(ing.Annotations, resource)
 
-	targets := annotations.TargetsFromTargetAnnotation(ing.Annotations)
-	targetsFromAnnotation := len(targets) > 0
+	targets, targetsFromAnnotation := annotations.TargetsFromTargetAnnotationWithSource(ing.Annotations)
 
 	if !targetsFromAnnotation {
 		targets = targetsFromIngressStatus(ing.Status)
@@ -289,19 +287,6 @@ func endpointsFromIngress(ing *networkv1.Ingress, ignoreHostnameAnnotation bool,
 		endpoints = append(endpoints, annotationEndpoints...)
 	}
 	return endpoints
-}
-
-// markTargetsFromAnnotation tags eps as having their Targets sourced from an
-// explicit per-resource target annotation, so the multi-source merge layer
-// can let that override survive --force-default-targets.
-func markTargetsFromAnnotation(eps []*endpoint.Endpoint, fromAnnotation bool) []*endpoint.Endpoint {
-	if !fromAnnotation {
-		return eps
-	}
-	for _, ep := range eps {
-		ep.WithTargetsFromAnnotation(true)
-	}
-	return eps
 }
 
 // targetsFromIngressStatus extracts targets from ingress load balancer status.

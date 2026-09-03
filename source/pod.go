@@ -147,11 +147,13 @@ func (ps *podSource) Endpoints(_ context.Context) ([]*endpoint.Endpoint, error) 
 
 func (ps *podSource) endpointsFromPodAnnotations(pod *v1.Pod) []*endpoint.Endpoint {
 	endpointMap := make(map[endpoint.EndpointKey][]string)
-	ps.addPodEndpointsToEndpointMap(endpointMap, pod)
+	annotationKeys := make(map[endpoint.EndpointKey]bool)
+	ps.addPodEndpointsToEndpointMap(endpointMap, annotationKeys, pod)
 
 	var endpoints []*endpoint.Endpoint
 	for key, targets := range endpointMap {
 		if ep := endpoint.NewEndpointWithTTL(key.DNSName, key.RecordType, key.RecordTTL, targets...); ep != nil {
+			ep.WithTargetsFromAnnotation(annotationKeys[key])
 			endpoints = append(endpoints, ep)
 		}
 	}
@@ -173,7 +175,7 @@ func (ps *podSource) endpointsFromPodTemplate(pod *v1.Pod) ([]*endpoint.Endpoint
 	return endpoints, nil
 }
 
-func (ps *podSource) addPodEndpointsToEndpointMap(endpointMap map[endpoint.EndpointKey][]string, pod *v1.Pod) {
+func (ps *podSource) addPodEndpointsToEndpointMap(endpointMap map[endpoint.EndpointKey][]string, annotationKeys map[endpoint.EndpointKey]bool, pod *v1.Pod) {
 	if ps.ignoreNonHostNetworkPods && !pod.Spec.HostNetwork {
 		log.Debugf("skipping pod %s. hostNetwork=false", pod.Name)
 		return
@@ -181,32 +183,32 @@ func (ps *podSource) addPodEndpointsToEndpointMap(endpointMap map[endpoint.Endpo
 
 	targets := annotations.TargetsFromTargetAnnotation(pod.Annotations)
 
-	ps.addInternalHostnameAnnotationEndpoints(endpointMap, pod, targets)
-	ps.addHostnameAnnotationEndpoints(endpointMap, pod, targets)
+	ps.addInternalHostnameAnnotationEndpoints(endpointMap, annotationKeys, pod, targets)
+	ps.addHostnameAnnotationEndpoints(endpointMap, annotationKeys, pod, targets)
 	ps.addKopsDNSControllerEndpoints(endpointMap, pod)
-	ps.addPodSourceDomainEndpoints(endpointMap, pod, targets)
+	ps.addPodSourceDomainEndpoints(endpointMap, annotationKeys, pod, targets)
 }
 
-func (ps *podSource) addInternalHostnameAnnotationEndpoints(endpointMap map[endpoint.EndpointKey][]string, pod *v1.Pod, targets []string) {
+func (ps *podSource) addInternalHostnameAnnotationEndpoints(endpointMap map[endpoint.EndpointKey][]string, annotationKeys map[endpoint.EndpointKey]bool, pod *v1.Pod, targets []string) {
 	if domainAnnotation, ok := pod.Annotations[annotations.InternalHostnameKey]; ok {
 		domainList := annotations.SplitHostnameAnnotation(domainAnnotation)
 		for _, domain := range domainList {
 			if len(targets) == 0 {
 				addToEndpointMap(endpointMap, pod, domain, endpoint.SuitableType(pod.Status.PodIP), pod.Status.PodIP)
 			} else {
-				addTargetsToEndpointMap(endpointMap, pod, targets, domain)
+				addTargetsToEndpointMap(endpointMap, annotationKeys, pod, targets, domain)
 			}
 		}
 	}
 }
 
-func (ps *podSource) addHostnameAnnotationEndpoints(endpointMap map[endpoint.EndpointKey][]string, pod *v1.Pod, targets []string) {
+func (ps *podSource) addHostnameAnnotationEndpoints(endpointMap map[endpoint.EndpointKey][]string, annotationKeys map[endpoint.EndpointKey]bool, pod *v1.Pod, targets []string) {
 	if domainAnnotation, ok := pod.Annotations[annotations.HostnameKey]; ok {
 		domainList := annotations.SplitHostnameAnnotation(domainAnnotation)
 		if len(targets) == 0 {
 			ps.addPodNodeEndpointsToEndpointMap(endpointMap, pod, domainList)
 		} else {
-			addTargetsToEndpointMap(endpointMap, pod, targets, domainList...)
+			addTargetsToEndpointMap(endpointMap, annotationKeys, pod, targets, domainList...)
 		}
 	}
 }
@@ -227,13 +229,13 @@ func (ps *podSource) addKopsDNSControllerEndpoints(endpointMap map[endpoint.Endp
 	}
 }
 
-func (ps *podSource) addPodSourceDomainEndpoints(endpointMap map[endpoint.EndpointKey][]string, pod *v1.Pod, targets []string) {
+func (ps *podSource) addPodSourceDomainEndpoints(endpointMap map[endpoint.EndpointKey][]string, annotationKeys map[endpoint.EndpointKey]bool, pod *v1.Pod, targets []string) {
 	if ps.podSourceDomain != "" {
 		domain := pod.Name + "." + ps.podSourceDomain
 		if len(targets) == 0 {
 			addToEndpointMap(endpointMap, pod, domain, endpoint.SuitableType(pod.Status.PodIP), pod.Status.PodIP)
 		}
-		addTargetsToEndpointMap(endpointMap, pod, targets, domain)
+		addTargetsToEndpointMap(endpointMap, annotationKeys, pod, targets, domain)
 	}
 }
 
@@ -279,15 +281,16 @@ func (ps *podSource) hostsFromTemplate(pod *v1.Pod) (map[endpoint.EndpointKey][]
 	return result, nil
 }
 
-func addTargetsToEndpointMap(endpointMap map[endpoint.EndpointKey][]string, pod *v1.Pod, targets []string, domainList ...string) {
+func addTargetsToEndpointMap(endpointMap map[endpoint.EndpointKey][]string, annotationKeys map[endpoint.EndpointKey]bool, pod *v1.Pod, targets []string, domainList ...string) {
 	for _, domain := range domainList {
 		for _, target := range targets {
-			addToEndpointMap(endpointMap, pod, domain, endpoint.SuitableType(target), target)
+			key := addToEndpointMap(endpointMap, pod, domain, endpoint.SuitableType(target), target)
+			annotationKeys[key] = true
 		}
 	}
 }
 
-func addToEndpointMap(endpointMap map[endpoint.EndpointKey][]string, pod *v1.Pod, domain string, recordType string, address string) {
+func addToEndpointMap(endpointMap map[endpoint.EndpointKey][]string, pod *v1.Pod, domain string, recordType string, address string) endpoint.EndpointKey {
 	key := endpoint.EndpointKey{
 		DNSName:    domain,
 		RecordType: recordType,
@@ -297,4 +300,5 @@ func addToEndpointMap(endpointMap map[endpoint.EndpointKey][]string, pod *v1.Pod
 		endpointMap[key] = []string{}
 	}
 	endpointMap[key] = append(endpointMap[key], address)
+	return key
 }

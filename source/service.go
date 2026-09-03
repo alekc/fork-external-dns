@@ -304,9 +304,9 @@ func (sc *serviceSource) extractHeadlessEndpoints(svc *v1.Service, hostname stri
 	publishPodIPs := endpointsType != EndpointsTypeNodeExternalIP && endpointsType != EndpointsTypeHostIP && !sc.publishHostIP
 	publishNotReadyAddresses := svc.Spec.PublishNotReadyAddresses || sc.alwaysPublishNotReadyAddresses
 
-	targetsByHeadlessDomainAndType := sc.processHeadlessEndpointsFromSlices(
+	targetsByHeadlessDomainAndType, annotationOnlyByHeadlessDomainAndType := sc.processHeadlessEndpointsFromSlices(
 		pods, endpointSlices, hostname, endpointsType, publishPodIPs, publishNotReadyAddresses)
-	endpoints = buildHeadlessEndpoints(svc, targetsByHeadlessDomainAndType, ttl)
+	endpoints = buildHeadlessEndpoints(svc, targetsByHeadlessDomainAndType, annotationOnlyByHeadlessDomainAndType, ttl)
 
 	return endpoints
 }
@@ -328,6 +328,10 @@ func convertToEndpointSlices(rawEndpointSlices []any) []*discoveryv1.EndpointSli
 // processHeadlessEndpointsFromSlices processes EndpointSlices specifically for headless services
 // and returns deduped targets by domain/type.
 // TODO: Consider refactoring with generics when available: https://github.com/kubernetes/kubernetes/issues/133544
+// processHeadlessEndpointsFromSlices also reports, per domain/type key, whether
+// every target contributed to that key came from a Pod's explicit target
+// annotation, so the caller can let that survive --force-default-targets. A
+// key with any naturally-resolved contribution is never marked annotation-only.
 func (sc *serviceSource) processHeadlessEndpointsFromSlices(
 	pods []*v1.Pod,
 	endpointSlices []*discoveryv1.EndpointSlice,
@@ -335,8 +339,10 @@ func (sc *serviceSource) processHeadlessEndpointsFromSlices(
 	endpointsType string,
 	publishPodIPs bool,
 	publishNotReadyAddresses bool,
-) map[endpoint.EndpointKey]endpoint.Targets {
+) (map[endpoint.EndpointKey]endpoint.Targets, map[endpoint.EndpointKey]bool) {
 	targetsByHeadlessDomainAndType := make(map[endpoint.EndpointKey]endpoint.Targets)
+	annotationOnlyByKey := make(map[endpoint.EndpointKey]bool)
+	seenKey := make(map[endpoint.EndpointKey]bool)
 	for _, endpointSlice := range endpointSlices {
 		for _, ep := range endpointSlice.Endpoints {
 			if !conditionToBool(ep.Conditions.Ready) && !publishNotReadyAddresses {
@@ -360,13 +366,19 @@ func (sc *serviceSource) processHeadlessEndpointsFromSlices(
 				headlessDomains = append(headlessDomains, fmt.Sprintf("%s.%s", pod.Spec.Hostname, hostname))
 			}
 			for _, headlessDomain := range headlessDomains {
-				targets := sc.getTargetsForDomain(pod, ep, endpointSlice, endpointsType, headlessDomain)
+				targets, targetsFromAnnotation := sc.getTargetsForDomain(pod, ep, endpointSlice, endpointsType, headlessDomain)
 				for _, target := range targets {
 					key := endpoint.EndpointKey{
 						DNSName:    headlessDomain,
 						RecordType: endpoint.SuitableType(target),
 					}
 					targetsByHeadlessDomainAndType[key] = append(targetsByHeadlessDomainAndType[key], target)
+					if !seenKey[key] {
+						annotationOnlyByKey[key] = targetsFromAnnotation
+						seenKey[key] = true
+					} else {
+						annotationOnlyByKey[key] = annotationOnlyByKey[key] && targetsFromAnnotation
+					}
 				}
 			}
 		}
@@ -376,7 +388,7 @@ func (sc *serviceSource) processHeadlessEndpointsFromSlices(
 	for k, v := range targetsByHeadlessDomainAndType {
 		result[k] = append(endpoint.Targets(nil), v...)
 	}
-	return result
+	return result, annotationOnlyByKey
 }
 
 // Helper to find pod for endpoint
@@ -393,24 +405,26 @@ func findPodForEndpoint(ep discoveryv1.Endpoint, pods []*v1.Pod) *v1.Pod {
 	return nil
 }
 
-// Helper to get targets for domain
+// Helper to get targets for domain. The second return value reports whether
+// targets came from the Pod's explicit target annotation rather than natural
+// resolution (node/host IP or the EndpointSlice address).
 func (sc *serviceSource) getTargetsForDomain(
 	pod *v1.Pod,
 	ep discoveryv1.Endpoint,
 	endpointSlice *discoveryv1.EndpointSlice,
-	endpointsType, headlessDomain string) endpoint.Targets {
-	targets := annotations.TargetsFromTargetAnnotation(pod.Annotations)
-	if len(targets) == 0 {
+	endpointsType, headlessDomain string) (endpoint.Targets, bool) {
+	targets, targetsFromAnnotation := annotations.TargetsFromTargetAnnotationWithSource(pod.Annotations)
+	if !targetsFromAnnotation {
 		switch {
 		case endpointsType == EndpointsTypeNodeExternalIP:
 			if sc.nodeInformer == nil {
 				log.Warnf("Skipping EndpointSlice %s/%s as --service-type-filter disable node informer", endpointSlice.Namespace, endpointSlice.Name)
-				return nil
+				return nil, false
 			}
 			node, err := sc.nodeInformer.Lister().Get(pod.Spec.NodeName)
 			if err != nil {
 				log.Errorf("Get node[%s] of pod[%s] error: %v; not adding any NodeExternalIP endpoints", pod.Spec.NodeName, pod.GetName(), err)
-				return nil
+				return nil, false
 			}
 			for _, address := range node.Status.Addresses {
 				if address.Type == v1.NodeExternalIP || (sc.exposeInternalIPv6 && address.Type == v1.NodeInternalIP && endpoint.SuitableType(address.Address) == endpoint.RecordTypeAAAA) {
@@ -424,18 +438,20 @@ func (sc *serviceSource) getTargetsForDomain(
 		default:
 			if len(ep.Addresses) == 0 {
 				log.Warnf("EndpointSlice %s/%s has no addresses for endpoint %v", endpointSlice.Namespace, endpointSlice.Name, ep)
-				return nil
+				return nil, false
 			}
 			address := ep.Addresses[0]
 			targets = endpoint.Targets{address}
 			log.Debugf("Generating matching endpoint %s with EndpointSliceAddress IP %s", headlessDomain, address)
 		}
 	}
-	return targets
+	return targets, targetsFromAnnotation
 }
 
-// Helper to build endpoints from deduped targets
-func buildHeadlessEndpoints(svc *v1.Service, targetsByHeadlessDomainAndType map[endpoint.EndpointKey]endpoint.Targets, ttl endpoint.TTL) []*endpoint.Endpoint {
+// Helper to build endpoints from deduped targets. annotationOnlyByKey marks a
+// key whose every contribution came from a Pod's explicit target annotation,
+// so the resulting Endpoint can survive --force-default-targets.
+func buildHeadlessEndpoints(svc *v1.Service, targetsByHeadlessDomainAndType map[endpoint.EndpointKey]endpoint.Targets, annotationOnlyByKey map[endpoint.EndpointKey]bool, ttl endpoint.TTL) []*endpoint.Endpoint {
 	var endpoints []*endpoint.Endpoint
 	headlessKeys := make([]endpoint.EndpointKey, 0, len(targetsByHeadlessDomainAndType))
 	for headlessKey := range targetsByHeadlessDomainAndType {
@@ -462,6 +478,7 @@ func buildHeadlessEndpoints(svc *v1.Service, targetsByHeadlessDomainAndType map[
 		ep := endpoint.NewEndpointWithTTL(headlessKey.DNSName, headlessKey.RecordType, ttl, targets...)
 		if ep != nil {
 			ep.WithLabel(endpoint.ResourceLabelKey, fmt.Sprintf("service/%s/%s", svc.Namespace, svc.Name))
+			ep.WithTargetsFromAnnotation(annotationOnlyByKey[headlessKey])
 			endpoints = append(endpoints, ep)
 		}
 	}
@@ -517,11 +534,11 @@ func (sc *serviceSource) generateEndpoints(svc *v1.Service, hostname string, pro
 
 	ttl := annotations.TTLFromAnnotations(svc.Annotations, resource)
 
-	targets := annotations.TargetsFromTargetAnnotation(svc.Annotations)
+	targets, targetsFromAnnotation := annotations.TargetsFromTargetAnnotationWithSource(svc.Annotations)
 
 	endpoints := make([]*endpoint.Endpoint, 0)
 
-	if len(targets) == 0 {
+	if !targetsFromAnnotation {
 		switch svc.Spec.Type {
 		case v1.ServiceTypeLoadBalancer:
 			if useClusterIP {
@@ -554,7 +571,7 @@ func (sc *serviceSource) generateEndpoints(svc *v1.Service, hostname string, pro
 		}
 	}
 
-	endpoints = append(endpoints, endpoint.EndpointsForHostname(hostname, targets, ttl, providerSpecific, setIdentifier, resource)...)
+	endpoints = append(endpoints, markTargetsFromAnnotation(endpoint.EndpointsForHostname(hostname, targets, ttl, providerSpecific, setIdentifier, resource), targetsFromAnnotation)...)
 
 	return endpoints
 }

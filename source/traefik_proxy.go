@@ -833,6 +833,10 @@ func extractEndpoints[T interface {
 		typed.GetObjectKind().SetGroupVersionKind(obj.GetObjectKind().GroupVersionKind())
 
 		targets := annotations.TargetsFromTargetAnnotation(typed.GetAnnotations())
+		// Traefik route kinds have no natural target fallback: targets are
+		// only ever populated from this annotation, so any resulting
+		// endpoint should survive --force-default-targets.
+		targetsFromAnnotation := len(targets) > 0
 		name := getObjectFullName(typed)
 
 		ingressEndpoints, err := generateEndpoints(typed, targets)
@@ -844,6 +848,7 @@ func extractEndpoints[T interface {
 			log.Debugf("No endpoints could be generated from Host %s", name)
 			continue
 		}
+		ingressEndpoints = markTargetsFromAnnotation(ingressEndpoints, targetsFromAnnotation)
 
 		// All traefik route kinds map to the traefik-proxy source. The concrete
 		// CRD types satisfy client.Object; the assertion guards the generic T.
