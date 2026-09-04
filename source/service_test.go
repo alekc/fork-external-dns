@@ -1332,6 +1332,58 @@ func testMultipleServicesEndpoints(t *testing.T) {
 	}
 }
 
+// TestServiceSourceEndpoints_MergedServicesNotAnnotationOnly covers two
+// LoadBalancer Services that share the same hostname-annotation-derived DNS
+// name: one carries an explicit target annotation, the other resolves its
+// target naturally from the LoadBalancer ingress IP. Once merged under the
+// shared owner record, the result must not be marked annotation-only, since
+// only one of the two contributions was actually annotation-sourced.
+func TestServiceSourceEndpoints_MergedServicesNotAnnotationOnly(t *testing.T) {
+	kubernetesClient := fake.NewClientset()
+
+	annotatedService := &v1.Service{
+		Spec:      v1.ServiceSpec{Type: v1.ServiceTypeLoadBalancer},
+		Namespace: "testing",
+		Name:      "foo-annotated",
+		Annotations: map[string]string{
+			annotations.HostnameKey: "foo.example.org",
+			annotations.TargetKey:   "9.9.9.9",
+		},
+		Status: v1.ServiceStatus{
+			LoadBalancer: v1.LoadBalancerStatus{
+				Ingress: []v1.LoadBalancerIngress{{IP: "9.9.9.9"}},
+			},
+		},
+	}
+	naturalService := &v1.Service{
+		Spec:        v1.ServiceSpec{Type: v1.ServiceTypeLoadBalancer},
+		Namespace:   "testing",
+		Name:        "foo-natural",
+		Annotations: map[string]string{annotations.HostnameKey: "foo.example.org"},
+		Status: v1.ServiceStatus{
+			LoadBalancer: v1.LoadBalancerStatus{
+				Ingress: []v1.LoadBalancerIngress{{IP: "1.2.3.4"}},
+			},
+		},
+	}
+
+	for _, svc := range []*v1.Service{annotatedService, naturalService} {
+		_, err := kubernetesClient.CoreV1().Services(svc.Namespace).Create(t.Context(), svc, metav1.CreateOptions{})
+		require.NoError(t, err)
+	}
+
+	client, err := NewServiceSource(t.Context(), kubernetesClient, &Config{LabelFilter: labels.Everything()})
+	require.NoError(t, err)
+
+	res, err := client.Endpoints(t.Context())
+	require.NoError(t, err)
+
+	require.Len(t, res, 1)
+	assert.ElementsMatch(t, []string{"9.9.9.9", "1.2.3.4"}, []string(res[0].Targets))
+	assert.False(t, res[0].TargetsFromAnnotation(),
+		"the naturally-resolved service's target is not annotation-sourced and must clear annotation-only status for the merged record")
+}
+
 // testServiceSourceEndpoints tests that various services generate the correct endpoints.
 func TestClusterIpServices(t *testing.T) {
 	t.Parallel()

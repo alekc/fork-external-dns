@@ -1771,12 +1771,10 @@ func TestGatewayHTTPRouteSource_AnnotationSurvivesUnprovisionedGateway(t *testin
 
 	gateways := []*v1.Gateway{
 		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "annotated-gateway",
-				Namespace: "gateway-namespace",
-				Annotations: map[string]string{
-					annotations.TargetKey: "4.3.2.1",
-				},
+			Name:      "annotated-gateway",
+			Namespace: "gateway-namespace",
+			Annotations: map[string]string{
+				annotations.TargetKey: "4.3.2.1",
 			},
 			Spec: v1.GatewaySpec{
 				Listeners: []v1.Listener{{
@@ -1787,10 +1785,8 @@ func TestGatewayHTTPRouteSource_AnnotationSurvivesUnprovisionedGateway(t *testin
 			Status: gatewayStatus("1.2.3.4"),
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "unprovisioned-gateway",
-				Namespace: "gateway-namespace",
-			},
+			Name:      "unprovisioned-gateway",
+			Namespace: "gateway-namespace",
 			Spec: v1.GatewaySpec{
 				Listeners: []v1.Listener{{
 					Protocol:      v1.HTTPProtocolType,
@@ -1802,10 +1798,8 @@ func TestGatewayHTTPRouteSource_AnnotationSurvivesUnprovisionedGateway(t *testin
 	}
 
 	route := &v1.HTTPRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "route-namespace",
-		},
+		Name:      "test",
+		Namespace: "route-namespace",
 		Spec: v1.HTTPRouteSpec{
 			Hostnames: []v1.Hostname{"test.example.internal"},
 			CommonRouteSpec: v1.CommonRouteSpec{

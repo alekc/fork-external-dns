@@ -253,6 +253,12 @@ func (sc *serviceSource) Endpoints(_ context.Context) ([]*endpoint.Endpoint, err
 				}
 				existing[0].Targets = append(existing[0].Targets, ep.Targets...)
 				existing[0].Targets = endpoint.NewTargets(existing[0].Targets...)
+				// The merged record is annotation-only only if every Service
+				// merged into it was itself annotation-sourced, otherwise a
+				// naturally-resolved Service's targets would ride along
+				// under another Service's annotation protection (or vice
+				// versa) once combined under the shared owner record.
+				existing[0].WithTargetsFromAnnotation(existing[0].TargetsFromAnnotation() && ep.TargetsFromAnnotation())
 				mergedEndpoints[key] = existing
 			} else {
 				ep.Targets = endpoint.NewTargets(ep.Targets...)

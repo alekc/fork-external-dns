@@ -357,6 +357,12 @@ func (ts *traefikSource) endpointsFromIngressRoute(ingressRoute *IngressRoute, t
 		}
 	}
 
+	// Mark provenance before template expansion: endpoints ApplyTemplates
+	// appends below (e.g. under --combine-fqdn-annotation) are template-
+	// derived, not annotation-sourced, and must default to unmarked so
+	// they remain eligible for --force-default-targets.
+	endpoints = markTargetsFromAnnotation(endpoints, len(targets) > 0)
+
 	return ts.templateEngine.ApplyTemplates(endpoints, ingressRoute)
 }
 
@@ -390,6 +396,12 @@ func (ts *traefikSource) endpointsFromIngressRouteTCP(ingressRoute *IngressRoute
 		}
 	}
 
+	// Mark provenance before template expansion: endpoints ApplyTemplates
+	// appends below (e.g. under --combine-fqdn-annotation) are template-
+	// derived, not annotation-sourced, and must default to unmarked so
+	// they remain eligible for --force-default-targets.
+	endpoints = markTargetsFromAnnotation(endpoints, len(targets) > 0)
+
 	return ts.templateEngine.ApplyTemplates(endpoints, ingressRoute)
 }
 
@@ -409,6 +421,12 @@ func (ts *traefikSource) endpointsFromIngressRouteUDP(ingressRoute *IngressRoute
 			endpoints = append(endpoints, endpoint.EndpointsForHostname(hostname, targets, ttl, providerSpecific, setIdentifier, resource)...)
 		}
 	}
+
+	// Mark provenance before template expansion: endpoints ApplyTemplates
+	// appends below (e.g. under --combine-fqdn-annotation) are template-
+	// derived, not annotation-sourced, and must default to unmarked so
+	// they remain eligible for --force-default-targets.
+	endpoints = markTargetsFromAnnotation(endpoints, len(targets) > 0)
 
 	return ts.templateEngine.ApplyTemplates(endpoints, ingressRoute)
 }
@@ -833,12 +851,13 @@ func extractEndpoints[T interface {
 		typed.GetObjectKind().SetGroupVersionKind(obj.GetObjectKind().GroupVersionKind())
 
 		targets := annotations.TargetsFromTargetAnnotation(typed.GetAnnotations())
-		// Traefik route kinds have no natural target fallback: targets are
-		// only ever populated from this annotation, so any resulting
-		// endpoint should survive --force-default-targets.
-		targetsFromAnnotation := len(targets) > 0
 		name := getObjectFullName(typed)
 
+		// generateEndpoints marks provenance itself, before running the
+		// endpoints through ApplyTemplates: template-derived endpoints
+		// (e.g. under --combine-fqdn-annotation) must stay eligible for
+		// --force-default-targets rather than inheriting the target
+		// annotation's protection just because they share this object.
 		ingressEndpoints, err := generateEndpoints(typed, targets)
 		if err != nil {
 			return nil, err
@@ -848,7 +867,6 @@ func extractEndpoints[T interface {
 			log.Debugf("No endpoints could be generated from Host %s", name)
 			continue
 		}
-		ingressEndpoints = markTargetsFromAnnotation(ingressEndpoints, targetsFromAnnotation)
 
 		// All traefik route kinds map to the traefik-proxy source. The concrete
 		// CRD types satisfy client.Object; the assertion guards the generic T.
