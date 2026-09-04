@@ -1829,7 +1829,7 @@ func TestGatewayHTTPRouteSource_AnnotationSurvivesUnprovisionedGateway(t *testin
 	kubeClient := kubefake.NewClientset()
 	for _, name := range []string{"gateway-namespace", "route-namespace"} {
 		_, err := kubeClient.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Name: name,
 		}, metav1.CreateOptions{})
 		require.NoError(t, err, "failed to create Namespace")
 	}

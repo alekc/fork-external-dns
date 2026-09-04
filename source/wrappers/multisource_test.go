@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	networkv1 "k8s.io/api/networking/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -402,12 +401,10 @@ func TestMultiSource_AddEventHandler(t *testing.T) {
 // layer in isolation.
 func TestMultiSource_IngressTargetAnnotationSurvivesForceDefaultTargets(t *testing.T) {
 	ing := &networkv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "foo",
-			Namespace: "default",
-			Annotations: map[string]string{
-				annotations.TargetKey: "3.3.3.3",
-			},
+		Name:      "foo",
+		Namespace: "default",
+		Annotations: map[string]string{
+			annotations.TargetKey: "3.3.3.3",
 		},
 		Spec: networkv1.IngressSpec{
 			Rules: []networkv1.IngressRule{{Host: "foo.bar"}},

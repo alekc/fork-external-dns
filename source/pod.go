@@ -300,7 +300,7 @@ func addTargetsToEndpointMap(endpointMap map[endpoint.EndpointKey][]string, anno
 // sourced: AND-merge rather than overwrite, so whichever contribution (across
 // the several callers that can share a domain) runs first or last can't mask
 // a differently-sourced contribution to the same key.
-func addToEndpointMap(endpointMap map[endpoint.EndpointKey][]string, annotationKeys map[endpoint.EndpointKey]bool, pod *v1.Pod, domain string, recordType string, address string, fromAnnotation bool) endpoint.EndpointKey {
+func addToEndpointMap(endpointMap map[endpoint.EndpointKey][]string, annotationKeys map[endpoint.EndpointKey]bool, pod *v1.Pod, domain string, recordType string, address string, fromAnnotation bool) {
 	key := endpoint.EndpointKey{
 		DNSName:    domain,
 		RecordType: recordType,
@@ -315,5 +315,4 @@ func addToEndpointMap(endpointMap map[endpoint.EndpointKey][]string, annotationK
 	} else {
 		annotationKeys[key] = fromAnnotation
 	}
-	return key
 }
